@@ -1,8 +1,11 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Titanium.Web.Proxy.EventArguments;
 using Titanium.Web.Proxy.Helpers;
@@ -13,14 +16,14 @@ namespace Titanium.Web.Proxy.Examples.Basic
 {
     public class ProxyTestController
     {
-        private readonly ProxyServer proxyServer;
-
+        readonly ProxyServer proxyServer;
+        readonly Regex wuProxyRegex = new Regex(@"pxywuden0(3|4).hqintl1.com", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         //keep track of request headers
-        private readonly IDictionary<Guid, HeaderCollection> requestHeaderHistory = new ConcurrentDictionary<Guid, HeaderCollection>();
+        readonly IDictionary<Guid, HeaderCollection> requestHeaderHistory = new ConcurrentDictionary<Guid, HeaderCollection>();
 
         //keep track of response headers
-        private readonly IDictionary<Guid, HeaderCollection> responseHeaderHistory = new ConcurrentDictionary<Guid, HeaderCollection>();
+        readonly IDictionary<Guid, HeaderCollection> responseHeaderHistory = new ConcurrentDictionary<Guid, HeaderCollection>();
 
         //share requestBody outside handlers
         //Using a dictionary is not a good idea since it can cause memory overflow
@@ -32,11 +35,11 @@ namespace Titanium.Web.Proxy.Examples.Basic
             proxyServer = new ProxyServer();
 
             //generate root certificate without storing it in file system
-            //proxyServer.CertificateEngine = Network.CertificateEngine.BouncyCastle;
-            //proxyServer.CertificateManager.CreateTrustedRootCertificate(false);
-            //proxyServer.CertificateManager.TrustRootCertificate();
+            proxyServer.CertificateEngine = Network.CertificateEngine.BouncyCastle;
+            proxyServer.CertificateManager.CreateTrustedRootCertificate(false);
+            proxyServer.CertificateManager.TrustRootCertificate();
 
-            proxyServer.ExceptionFunc = exception => Console.WriteLine(exception.Message);
+            proxyServer.ExceptionFunc = exception => LogMessage(exception.Message);
             proxyServer.TrustRootCertificate = true;
             proxyServer.ForwardToUpstreamGateway = true;
 
@@ -77,12 +80,16 @@ namespace Titanium.Web.Proxy.Examples.Basic
                 //},
 
                 //You can set only one of the ExcludedHttpsHostNameRegex and IncludedHttpsHostNameRegex properties, otherwise ArgumentException will be thrown
-
-                //Use self-issued generic certificate on all https requests
-                //Optimizes performance by not creating a certificate for each https-enabled domain
-                //Useful when certificate trust is not required by proxy clients
-                //GenericCertificate = new X509Certificate2(Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "genericcert.pfx"), "password")
             };
+
+            //Use self-issued generic certificate on all https requests
+            //Optimizes performance by not creating a certificate for each https-enabled domain
+            //Useful when certificate trust is not required by proxy clients
+            //string certFilename = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "genericcert.cer");
+            //if (!string.IsNullOrWhiteSpace(certFilename) && File.Exists(certFilename))
+            //{
+            //    explicitEndPoint.GenericCertificate = new X509Certificate2(certFilename, "PEM pass phrase");
+            //};
 
             //An explicit endpoint is where the client knows about the existence of a proxy
             //So client sends request in a proxy friendly manner
@@ -106,7 +113,7 @@ namespace Titanium.Web.Proxy.Examples.Basic
             //proxyServer.UpStreamHttpsProxy = new ExternalProxy() { HostName = "localhost", Port = 8888 };
 
             foreach (var endPoint in proxyServer.ProxyEndPoints)
-                Console.WriteLine("Listening on '{0}' endpoint at Ip {1} and port: {2} ", endPoint.GetType().Name, endPoint.IpAddress, endPoint.Port);
+                LogMessage("Listening on '{0}' endpoint at Ip {1} and port: {2} ", endPoint.GetType().Name, endPoint.IpAddress, endPoint.Port);
 
 #if NET45
             //Only explicit proxies can be set as system proxy!
@@ -131,20 +138,28 @@ namespace Titanium.Web.Proxy.Examples.Basic
             //proxyServer.CertificateManager.RemoveTrustedRootCertificates();
         }
 
-        private async Task OnTunnelConnectRequest(object sender, TunnelConnectSessionEventArgs e)
+        async Task OnTunnelConnectRequest(object sender, TunnelConnectSessionEventArgs e)
         {
-            Console.WriteLine("Tunnel to: " + e.WebSession.Request.Host);
+            LogMessage("Tunnel to: " + e.WebSession.Request.Host);
         }
 
-        private async Task OnTunnelConnectResponse(object sender, TunnelConnectSessionEventArgs e)
+        async Task OnTunnelConnectResponse(object sender, TunnelConnectSessionEventArgs e)
         {
         }
 
         //intecept & cancel redirect or update requests
         public async Task OnRequest(object sender, SessionEventArgs e)
         {
-            Console.WriteLine("Active Client Connections:" + ((ProxyServer)sender).ClientConnectionCount);
-            Console.WriteLine(e.WebSession.Request.Url);
+            LogMessage("Active Client Connections:" + ((ProxyServer)sender).ClientConnectionCount);
+            LogMessage(e.WebSession.Request.Url);
+
+            if (wuProxyRegex.IsMatch(e.WebSession.Request.Host))
+            {
+                var builder = new UriBuilder(e.WebSession.Request.RequestUri) { Host = "pxywuden01.hqintl1.com" };
+                e.WebSession.Request.RequestUri = builder.Uri;
+                e.WebSession.Request.Host = builder.Uri.Host;
+                LogMessage("Redirected pxywuden03.hqintl1.com to pxywuden01.hqintl1.com");
+            }
 
             //read request headers
             requestHeaderHistory[e.Id] = e.WebSession.Request.RequestHeaders;
@@ -182,10 +197,17 @@ namespace Titanium.Web.Proxy.Examples.Basic
             //}
         }
 
+        static void LogMessage(string v, params object[] args)
+        {
+            #if _DEBUG
+            Console.WriteLine(v, args);
+            #endif
+        }
+
         //Modify response
         public async Task OnResponse(object sender, SessionEventArgs e)
         {
-            Console.WriteLine("Active Server Connections:" + ((ProxyServer)sender).ServerConnectionCount);
+            LogMessage("Active Server Connections:" + ((ProxyServer)sender).ServerConnectionCount);
 
             //if (requestBodyHistory.ContainsKey(e.Id))
             //{
@@ -197,7 +219,7 @@ namespace Titanium.Web.Proxy.Examples.Basic
             responseHeaderHistory[e.Id] = e.WebSession.Response.ResponseHeaders;
 
             // print out process id of current session
-            //Console.WriteLine($"PID: {e.WebSession.ProcessId.Value}");
+            //LogMessage($"PID: {e.WebSession.ProcessId.Value}");
 
             //if (!e.ProxySession.Request.Host.Equals("medeczane.sgk.gov.tr")) return;
             if (e.WebSession.Request.Method == "GET" || e.WebSession.Request.Method == "POST")

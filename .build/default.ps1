@@ -14,7 +14,7 @@ if(!$BuildNumber) { $BuildNumber = "1"}
 
 ## The build configuration, i.e. Debug/Release
 if(!$Configuration) { $Configuration = $env:Configuration }
-if(!$Configuration) { $Configuration = "Release" }
+if(!$Configuration) { $Configuration = "Debug" }
 
 if(!$Version) { $Version = $env:APPVEYOR_BUILD_VERSION }
 if(!$Version) { $Version = "1.0.$BuildNumber" }
@@ -54,7 +54,7 @@ Task Restore-Packages  {
 }
 
 Task Install-MSBuild {
-    if(!(Test-Path $MSBuild14)) 
+    if(!(Test-Path $MSBuild)) 
     { 
         cinst microsoft-build-tools -y
     }
